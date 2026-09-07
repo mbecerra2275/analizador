@@ -1,0 +1,15 @@
+# Entornos virtuales de Python
+venv/
+env/
+ENV/
+
+# Archivos de caché e intérprete de Python
+__pycache__/
+*.pyc
+
+# Carpetas de salidas/logs temporales
+output/
+*.log
+
+# Configuraciones locales de VS Code
+.vscode/
