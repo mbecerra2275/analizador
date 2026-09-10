@@ -1,116 +1,132 @@
-# app/reporters/markdown_reporter.py
+"""
+Generador de reportes en formato Markdown.
+"""
 import os
 from datetime import datetime
-from typing import Dict, List
+from pathlib import Path
+from typing import Dict, Any
 
 class MarkdownReporter:
-    def __init__(self, output_dir: str = "output/reports/"):
-        self.output_dir = output_dir
-        os.makedirs(output_dir, exist_ok=True)
+    """Genera reportes en formato Markdown."""
     
-    def generate_report(self, data: Dict) -> str:
+    def __init__(self, output_dir: str = "output/reports"):
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+    
+    def generate(self, data: Dict[str, Any]) -> str:
+        """
+        Genera un reporte Markdown.
+        
+        Args:
+            data: Datos del análisis
+            
+        Returns:
+            Ruta del archivo generado
+        """
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"analysis_report_{timestamp}.md"
-        filepath = os.path.join(self.output_dir, filename)
+        filename = self.output_dir / f"analysis_report_{timestamp}.md"
         
-        content = self._build_content(data)
+        content = self._build_markdown(data)
         
-        with open(filepath, 'w', encoding='utf-8') as f:
+        with open(filename, 'w', encoding='utf-8') as f:
             f.write(content)
         
-        return filepath
+        return str(filename)
     
-    def _build_content(self, data: Dict) -> str:
+    def _build_markdown(self, data: Dict[str, Any]) -> str:
+        """Construye el contenido del reporte en Markdown."""
         lines = []
-        lines.append("# 📊 Análisis de Logs - Reporte")
+        
+        # Título
+        lines.append("# 📊 Reporte de Análisis de Logs")
         lines.append("")
         lines.append(f"**Fecha:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append(f"**Archivo:** `{data.get('file', 'N/A')}`")
         lines.append("")
         
-        stats = data.get('statistics', {})
+        # Resumen
         lines.append("## 📈 Resumen")
         lines.append("")
-        lines.append(f"- **Total Transacciones:** {stats.get('total_transactions', 0)}")
-        lines.append(f"- **Tasa de Éxito:** {stats.get('success_rate', 0):.1f}%")
-        lines.append(f"- **Errores Reales (únicos):** {data.get('total_errors_found', 0)}")
-        lines.append(f"- **Falsos Positivos:** {data.get('total_false_positives', 0)}")
+        summary = data.get('summary', {})
+        lines.append(f"- 📊 **Total de logs:** {summary.get('total_logs', 0):,}")
+        lines.append(f"- 🔗 **Transacciones:** {summary.get('total_groups', 0):,}")
+        lines.append(f"- ✅ **Grupos filtrados:** {summary.get('filtered_groups', 0):,}")
+        lines.append(f"- ⚠️ **Errores detectados:** {summary.get('total_errors', 0):,}")
         lines.append("")
         
-        # Severidad
-        if data.get('severity_summary'):
-            lines.append("### Severidad de Errores")
+        # Niveles de log
+        levels = summary.get('levels', {})
+        if levels:
+            lines.append("### 📊 Niveles de Log")
             lines.append("")
-            for severity, count in data.get('severity_summary', {}).items():
-                emoji = self._get_severity_emoji(severity)
-                lines.append(f"- {emoji} **{severity}**: {count}")
-            lines.append("")
-        
-        # Tipos de error
-        if data.get('error_types_summary'):
-            lines.append("### Tipos de Error")
-            lines.append("")
-            for error_type, count in data.get('error_types_summary', {}).items():
-                lines.append(f"- **{error_type}**: {count}")
+            for level, count in sorted(levels.items(), key=lambda x: x[1], reverse=True):
+                lines.append(f"- **{level}:** {count:,}")
             lines.append("")
         
-        # Análisis de IA
-        if data.get('ai_analysis'):
-            lines.append("## 🤖 Análisis de IA")
-            lines.append("")
-            lines.append(data['ai_analysis'])
+        # Análisis IA
+        ai_analysis = data.get('ai_analysis', {})
+        lines.append("## 🤖 Análisis con IA")
+        lines.append("")
+        lines.append(f"**Estado:** {ai_analysis.get('status', 'No disponible')}")
+        lines.append("")
+        
+        if ai_analysis.get('status') == 'success':
+            analysis = ai_analysis.get('analysis', '')
+            if analysis:
+                lines.append(analysis)
+                lines.append("")
+        else:
+            lines.append("⚠️ Análisis IA no disponible. Revisar que Ollama esté corriendo.")
             lines.append("")
         
-        # Errores Reales
-        if data.get('true_errors'):
-            lines.append("## 🔴 Errores Reales Detectados")
-            lines.append("")
-            lines.append(f"Mostrando {len(data['true_errors'])} de {data.get('total_errors_found', 0)} errores únicos")
+        # Errores
+        errors = data.get('errors', [])
+        if errors:
+            lines.append("## ⚠️ Errores Encontrados")
             lines.append("")
             
-            for i, error in enumerate(data['true_errors'][:15], 1):
-                entry = error['entry']
-                severity = error.get('severity', 'UNKNOWN')
-                emoji = self._get_severity_emoji(str(severity))
+            for i, error in enumerate(errors[:20], 1):
+                lines.append(f"### {i}. Correlation ID: `{error.get('correlation_id', 'N/A')}`")
+                lines.append("")
+                lines.append(f"- **Cantidad de errores:** {error.get('error_count', 0)}")
+                lines.append(f"- **Timestamp:** {error.get('timestamp', 'N/A')}")
+                lines.append("")
                 
-                lines.append(f"### {emoji} Error {i}: {error.get('type', 'UNKNOWN')}")
-                lines.append("")
-                lines.append(f"- **Severidad:** `{severity}`")
-                lines.append(f"- **Servicio:** `{entry.service}`")
-                lines.append(f"- **Correlation ID:** `{entry.correlation_id or 'N/A'}`")
-                if entry.timestamp:
-                    lines.append(f"- **Timestamp:** `{entry.timestamp.strftime('%Y-%m-%d %H:%M:%S')}`")
-                lines.append("")
-                lines.append("**Mensaje:**")
-                lines.append("```")
-                lines.append(entry.message[:300])
-                lines.append("```")
-                lines.append("")
-                if entry.stack_trace:
-                    lines.append("**Stack Trace:**")
-                    lines.append("```")
-                    lines.append(entry.stack_trace[:200])
-                    lines.append("```")
+                messages = error.get('messages', [])
+                if messages:
+                    lines.append("**Mensajes de error:**")
                     lines.append("")
-                lines.append("---")
+                    for msg in messages[:5]:
+                        lines.append(f"```")
+                        lines.append(msg)
+                        lines.append(f"```")
+                        lines.append("")
+                    
+                    if len(messages) > 5:
+                        lines.append(f"... y {len(messages) - 5} mensajes más")
+                        lines.append("")
+            
+            if len(errors) > 20:
+                lines.append(f"... y {len(errors) - 20} errores más")
                 lines.append("")
+        else:
+            lines.append("## ✅ No se encontraron errores")
+            lines.append("")
+            lines.append("¡Todo parece funcionar correctamente!")
+            lines.append("")
         
         # Recomendaciones
-        if data.get('recommendations'):
+        recommendations = data.get('recommendations', [])
+        if recommendations:
             lines.append("## 💡 Recomendaciones")
             lines.append("")
-            for i, rec in enumerate(data['recommendations'], 1):
-                lines.append(f"{i}. {rec}")
+            for rec in recommendations:
+                lines.append(f"- {rec}")
             lines.append("")
         
-        return '\n'.join(lines)
-    
-    def _get_severity_emoji(self, severity: str) -> str:
-        emojis = {
-            'CRITICAL': '🚨',
-            'HIGH': '🔴',
-            'MEDIUM': '🟡',
-            'LOW': '🟢',
-            'INFO': 'ℹ️',
-            'UNKNOWN': '❓'
-        }
-        return emojis.get(severity.upper(), '❓')
+        # Pie de página
+        lines.append("---")
+        lines.append("")
+        lines.append("_Reporte generado automáticamente por el Analizador de Logs con IA_")
+        
+        return "\n".join(lines)

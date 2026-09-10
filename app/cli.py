@@ -1,125 +1,96 @@
-# app/cli.py
+"""
+Interfaz de línea de comandos con soporte para GUI.
+"""
 import argparse
 import sys
-import os
+import logging
 from pathlib import Path
-from tkinter import Tk, filedialog
-from app.services.analysis_service import AnalysisService
-from app.config import load_config
 
-def seleccionar_archivo():
-    """Abre un diálogo para seleccionar archivo manualmente"""
-    try:
-        root = Tk()
-        root.withdraw()
-        root.attributes('-topmost', True)
+from .utils.ollama_checker import OllamaChecker
+from .services.analysis_service import AnalysisService
+from .config import Config
+
+def setup_logging(verbose: bool = False):
+    """Configura el logging."""
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+
+def check_ollama_status():
+    """Muestra el estado de Ollama."""
+    print("\n🔍 Verificando estado de Ollama...")
+    
+    installed = OllamaChecker.is_installed()
+    print(f"  Instalado: {'✅' if installed else '❌'}")
+    
+    if installed:
+        running = OllamaChecker.is_running()
+        print(f"  Corriendo: {'✅' if running else '❌'}")
         
-        archivo = filedialog.askopenfilename(
-            title="Selecciona el archivo de log",
-            filetypes=[
-                ("Archivos de log", "*.log"),
-                ("Archivos de texto", "*.txt"),
-                ("Todos los archivos", "*.*")
-            ],
-            initialdir=os.path.expanduser("~/Downloads")
-        )
-        root.destroy()
-        
-        return archivo if archivo else None
-    except:
-        print("⚠️  No se pudo abrir el selector de archivos")
-        return None
+        if not running:
+            print("  Intentando iniciar...")
+            success, msg = OllamaChecker.start_ollama()
+            print(f"  {'✅' if success else '❌'} {msg}")
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Herramienta de análisis de logs con IA",
-        epilog="Ejemplo: python -m app.cli --file logs/error.log"
-    )
-    
-    parser.add_argument(
-        '--file', '-f',
-        help='Ruta al archivo de log a analizar'
-    )
-    
-    parser.add_argument(
-        '--gui', '-g',
-        action='store_true',
-        help='Abre un selector gráfico para elegir el archivo'
-    )
-    
-    parser.add_argument(
-        '--output', '-o',
-        help='Directorio de salida para reportes'
-    )
-    
-    parser.add_argument(
-        '--no-ai',
-        action='store_true',
-        help='Deshabilita el análisis con IA'
-    )
-    
-    parser.add_argument(
-        '--model',
-        default='qwen2.5-coder:1.5b',
-        help='Modelo de Ollama a utilizar'
-    )
-    
-    parser.add_argument(
-        '--config',
-        help='Archivo de configuración YAML'
-    )
-    
-    parser.add_argument(
-        '--verbose', '-v',
-        action='store_true',
-        help='Muestra información detallada'
-    )
+    """Punto de entrada principal."""
+    parser = argparse.ArgumentParser(description="Analizador de Logs con IA")
+    parser.add_argument('--file', '-f', help='Archivo de logs a analizar')
+    parser.add_argument('--gui', '-g', action='store_true', help='Abrir interfaz gráfica')
+    parser.add_argument('--verbose', '-v', action='store_true', help='Modo verbose')
+    parser.add_argument('--check-ollama', action='store_true', help='Verificar estado de Ollama')
     
     args = parser.parse_args()
     
-    # Determinar el archivo
-    log_file = args.file
+    setup_logging(args.verbose)
     
-    if args.gui or not log_file:
-        print("📂 Selecciona el archivo de log...")
-        log_file = seleccionar_archivo()
-        if not log_file:
-            print("❌ No se seleccionó ningún archivo")
+    if args.check_ollama:
+        check_ollama_status()
+        return
+    
+    if args.gui:
+        # Abrir GUI
+        try:
+            from .gui.main_window import MainWindow
+            app = MainWindow()
+            app.run()
+            return
+        except ImportError as e:
+            print(f"❌ Error cargando GUI: {e}")
+            print("Ejecutando en modo CLI...")
+            # Continuar a modo CLI
+    
+    # Modo CLI
+    file_path = args.file
+    if not file_path:
+        file_path = input("📁 Ruta del archivo de logs: ").strip()
+        if not file_path:
+            print("❌ No se especificó archivo")
             sys.exit(1)
-        print(f"✅ Archivo seleccionado: {log_file}")
     
-    if not os.path.exists(log_file):
-        print(f"❌ Error: El archivo '{log_file}' no existe")
+    if not Path(file_path).exists():
+        print(f"❌ Archivo no encontrado: {file_path}")
         sys.exit(1)
     
-    config = load_config(args.config) if args.config else {}
+    # Verificar Ollama
+    check_ollama_status()
     
-    config.update({
-        'output_dir': args.output or config.get('output_dir', 'output/reports/'),
-        'ai_model': args.model,
-        'use_ai': not args.no_ai,
-        'verbose': args.verbose
-    })
-    
-    print("🚀 Iniciando análisis de logs...")
-    print("=" * 50)
-    
+    # Ejecutar análisis
+    print(f"\n📊 Analizando: {file_path}")
+    config = Config()
     service = AnalysisService(config)
-    result = service.analyze_log_file(log_file, use_ai=not args.no_ai)
+    report = service.analyze_file(file_path)
     
-    print("=" * 50)
-    print("📊 Resumen final:")
-    print(f"   Total transacciones: {result['statistics']['total_transactions']}")
-    print(f"   Tasa de éxito: {result['statistics']['success_rate']:.1f}%")
-    print(f"   Errores reales: {len(result['true_errors'])}")
-    print(f"   Falsos positivos: {len(result['false_positives'])}")
+    print(f"\n✅ Análisis completado")
+    print(f"📄 Reporte: {report.get('report_path', 'No generado')}")
+    print(f"📊 Logs: {report.get('total_logs', 0):,}")
+    print(f"🔄 Transacciones: {report.get('total_groups', 0):,}")
+    print(f"⚠️ Errores: {len(report.get('errors', []))}")
     
-    if result.get('recommendations'):
-        print("\n💡 Recomendaciones principales:")
-        for rec in result['recommendations'][:3]:
-            print(f"   • {rec}")
-    
-    print("\n✅ Análisis completado")
+    ai_status = report.get('ai_analysis', {}).get('status', 'No disponible')
+    print(f"🤖 IA: {ai_status}")
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
