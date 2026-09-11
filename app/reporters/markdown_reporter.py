@@ -1,19 +1,17 @@
 """
 Generador de reportes en formato Markdown y HTML.
 """
-import os                                          # Manejo de rutas y apertura de archivos
-import re                                          # Expresiones regulares para clasificar errores
-import html                                        # Escapar HTML en el reporte HTML
-from datetime import datetime                      # Timestamps del reporte
-from pathlib import Path                           # Rutas portables
-from typing import Dict, Any, List, Tuple          # Tipado
+import os
+import re
+import html
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, Any, List, Tuple
 
 
 class MarkdownReporter:
     """Genera reportes en formato Markdown (y adicionalmente HTML)."""
 
-    # Patrones de "ruido": HTML de páginas de error (Cloudflare, etc.) que no son
-    # errores reales de la aplicación y no deberían contarse como tal.
     NOISE_PATTERNS = [
         r"</?div", r"</?span", r"</?link", r"</?meta", r"</?html",
         r"</?head", r"</?body", r"</?script", r"</?style",
@@ -22,22 +20,21 @@ class MarkdownReporter:
         r"Please enable cookies", r"cf-no-screenshot",
     ]
 
-    # Palabras clave para clasificar cada error en una categoría legible.
     ERROR_CATEGORIES = [
-        ("timeout",     ["timed out", "timeout", "read timed out"]),
-        ("conexion",    ["connection refused", "connectexception", "connection reset",
-                         "no route to host", "unknownhost"]),
-        ("http_503",    ["response code: 503", "statuscode=503", "503"]),
-        ("http_521",    ["statuscode=521", "error code: 521", "521"]),
-        ("permisos",    ["permission denied", "access denied", "forbidden", "401", "403"]),
+        ("timeout",       ["timed out", "timeout", "read timed out"]),
+        ("conexion",      ["connection refused", "connectexception", "connection reset",
+                           "no route to host", "unknownhost"]),
+        ("http_503",      ["response code: 503", "statuscode=503", " 503 "]),
+        ("http_521",      ["statuscode=521", "error code: 521", " 521 "]),
+        ("permisos",      ["permission denied", "access denied", "forbidden", "401", "403"]),
         ("no_encontrado", ["not found", "404", "no such file"]),
-        ("base_datos",  ["sql", "database", "deadlock", "constraint", "jdbc"]),
+        ("base_datos",    ["sql", "database", "deadlock", "constraint", "jdbc"]),
+        ("nullpointer",   ["cannot read property", "cannot read properties",
+                           "of undefined", "of null", "nullpointer", "npe"]),
     ]
 
     def __init__(self, output_dir: str = "output/reports"):
-        # Directorio donde se guardarán los reportes (.md y .html).
         self.output_dir = Path(output_dir)
-        # Aseguramos que exista.
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------ #
@@ -48,50 +45,50 @@ class MarkdownReporter:
         Genera un reporte Markdown (y su versión HTML al lado).
 
         Args:
-            data: Datos del análisis.
+            data: Datos del análisis. Debe contener:
+                - file: ruta del archivo analizado
+                - summary: dict con total_logs, total_groups, etc.
+                - errors: lista de grupos de error
+                - ai_analysis: dict con status y analysis (nuevo formato)
+                - recommendations: lista de strings (opcional)
 
         Returns:
-            Ruta del archivo .md generado (compatibilidad con el código actual).
+            Ruta del archivo .md generado.
         """
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         md_path = self.output_dir / f"analysis_report_{timestamp}.md"
         html_path = self.output_dir / f"analysis_report_{timestamp}.html"
 
-        # Pre-procesamos los datos una sola vez (clasificación, ruido, etc.)
         prepared = self._prepare_data(data)
 
-        # Escribimos ambos formatos.
         md_path.write_text(self._build_markdown(prepared), encoding="utf-8")
         html_path.write_text(self._build_html(prepared), encoding="utf-8")
 
         return str(md_path)
 
     # ------------------------------------------------------------------ #
-    # Pre-procesamiento común (clasificación de errores y ruido)
+    # Pre-procesamiento común
     # ------------------------------------------------------------------ #
     def _prepare_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Prepara los datos: clasifica errores por tipo, separa ruido y
-        deduplica mensajes repetidos.
-
-        Devuelve un dict con la misma información pero enriquecida.
-        """
         errors_in = data.get("errors", []) or []
-        real_errors: List[Dict[str, Any]] = []   # Errores reales de la app
-        noise_errors: List[Dict[str, Any]] = []  # Ruido (HTML de páginas de error)
-        by_category: Dict[str, int] = {}         # Contador por categoría
+        real_errors: List[Dict[str, Any]] = []
+        noise_errors: List[Dict[str, Any]] = []
+        by_category: Dict[str, int] = {}
 
         for err in errors_in:
-            # Unificamos todos los mensajes del grupo para analizarlos.
             messages = err.get("messages", []) or []
+            # Si viene 'message' único (como en tu pipeline), lo tratamos también
+            if not messages and err.get("message"):
+                messages = [err["message"]]
+            if not messages and err.get("raw"):
+                messages = [err["raw"]]
+
             unique_msgs = self._dedupe(messages)
 
-            # ¿Es ruido? Lo decidimos si la mayoría de los mensajes lo son.
             noise_count = sum(1 for m in unique_msgs if self._is_noise(m))
             is_noise = noise_count > 0 and noise_count >= len(unique_msgs) / 2
 
-            # Clasificamos por categoría según palabras clave.
-            category = self._classify(unique_msgs)
+            category = err.get("category") or self._classify(unique_msgs)
 
             enriched = {
                 **err,
@@ -105,25 +102,22 @@ class MarkdownReporter:
                 noise_errors.append(enriched)
             else:
                 real_errors.append(enriched)
-                by_category[category] = by_category.get(category, 0) + err.get("error_count", 0)
+                by_category[category] = by_category.get(category, 0) + err.get("error_count", 1)
 
-        # Añadimos los datos enriquecidos al dict sin romper el original.
         prepared = dict(data)
         prepared["errors"] = real_errors
         prepared["noise_errors"] = noise_errors
         prepared["by_category"] = by_category
 
-        # Recalculamos el total real de errores (sin ruido).
         summary = dict(prepared.get("summary", {}))
-        summary["total_errors_real"] = sum(e.get("error_count", 0) for e in real_errors)
-        summary["total_noise"] = sum(e.get("error_count", 0) for e in noise_errors)
+        summary["total_errors_real"] = sum(e.get("error_count", 1) for e in real_errors)
+        summary["total_noise"] = sum(e.get("error_count", 1) for e in noise_errors)
         prepared["summary"] = summary
 
         return prepared
 
     @staticmethod
     def _dedupe(messages: List[str]) -> List[str]:
-        """Elimina mensajes duplicados conservando el orden."""
         seen, out = set(), []
         for m in messages:
             if m not in seen:
@@ -133,13 +127,11 @@ class MarkdownReporter:
 
     @classmethod
     def _is_noise(cls, msg: str) -> bool:
-        """Devuelve True si el mensaje parece HTML/ruido de página de error."""
         low = msg.lower()
         return any(re.search(pat, low) for pat in cls.NOISE_PATTERNS)
 
     @classmethod
     def _classify(cls, messages: List[str]) -> str:
-        """Clasifica un conjunto de mensajes en una categoría conocida."""
         joined = " ".join(messages).lower()
         for category, keywords in cls.ERROR_CATEGORIES:
             if any(k in joined for k in keywords):
@@ -147,15 +139,11 @@ class MarkdownReporter:
         return "otros"
 
     # ------------------------------------------------------------------ #
-    # Utilidades de presentación
+    # Utilidades
     # ------------------------------------------------------------------ #
     @staticmethod
     def _extract_range(messages: List[str]) -> str:
-        """
-        Extrae el rango temporal (primero y último timestamp) de los mensajes.
-        Si no se encuentra ninguno, devuelve '—'.
-        """
-        ts_re = re.compile(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
+        ts_re = re.compile(r"(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})")
         found = [ts_re.search(m).group(1) for m in messages if ts_re.search(m)]
         if not found:
             return "—"
@@ -163,7 +151,6 @@ class MarkdownReporter:
 
     @staticmethod
     def _emoji_for(category: str) -> str:
-        """Devuelve un emoji representativo según la categoría del error."""
         return {
             "timeout": "⏱️",
             "conexion": "🔌",
@@ -172,21 +159,30 @@ class MarkdownReporter:
             "permisos": "🔒",
             "no_encontrado": "🔍",
             "base_datos": "💾",
+            "nullpointer": "🪲",
             "otros": "⚠️",
         }.get(category, "⚠️")
 
+    @staticmethod
+    def _severity_emoji(sev: str) -> str:
+        return {
+            "CRITICAL": "🔴",
+            "HIGH": "🟠",
+            "MEDIUM": "🟡",
+            "LOW": "🟢",
+        }.get(str(sev).upper(), "⚪")
+
     # ------------------------------------------------------------------ #
-    # Generación de Markdown
+    # Markdown
     # ------------------------------------------------------------------ #
     def _build_markdown(self, data: Dict[str, Any]) -> str:
-        """Construye el contenido del reporte en Markdown (rediseñado)."""
         lines: List[str] = []
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         summary = data.get("summary", {})
         errors = data.get("errors", [])
         noise = data.get("noise_errors", [])
         by_category = data.get("by_category", {})
-        ai = data.get("ai_analysis", {})
+        ai = data.get("ai_analysis", {}) or {}
         recommendations = data.get("recommendations", []) or []
 
         # ----- Cabecera -----
@@ -230,43 +226,30 @@ class MarkdownReporter:
         lines += [
             "## 📑 Índice",
             "",
-            "1. [Niveles de log](#-niveles-de-log)",
-            "2. [Análisis con IA](#-análisis-con-ia)",
-            "3. [Detalle de errores](#-detalle-de-errores)",
-            "4. [Recomendaciones](#-recomendaciones)",
+            "1. [Análisis con IA](#-análisis-con-ia)",
+            "2. [Detalle de errores](#-detalle-de-errores)",
+            "3. [Recomendaciones](#-recomendaciones)",
             "",
             "---",
             "",
         ]
 
-        # ----- Niveles -----
-        levels = summary.get("levels", {})
-        if levels:
-            lines += ["## 📊 Niveles de log", ""]
-            for level, count in sorted(levels.items(), key=lambda x: x[1], reverse=True):
-                lines.append(f"- **{level}:** {count:,}")
-            lines.append("")
-
-        # ----- IA -----
-        lines += ["## 🤖 Análisis con IA", "", f"**Estado:** {ai.get('status', 'No disponible')}", ""]
-        if ai.get("status") == "success" and ai.get("analysis"):
-            lines += [ai["analysis"], ""]
-        else:
-            lines += ["⚠️ Análisis IA no disponible. Revisar que Ollama esté corriendo.", ""]
+        # ----- IA (formato estructurado nuevo) -----
+        lines += self._build_ai_section(ai)
 
         # ----- Detalle de errores -----
         lines += ["## ⚠️ Detalle de errores", ""]
         if not errors:
             lines += ["✅ No se encontraron errores reales.", ""]
         else:
-            for i, err in enumerate(errors[:30], 1):  # Mostramos hasta 30 en detalle
+            for i, err in enumerate(errors[:30], 1):
                 emoji = self._emoji_for(err.get("category", "otros"))
-                count = err.get("error_count", 0)
+                count = err.get("error_count", err.get("unique_count", 0))
                 cat = err.get("category", "otros")
                 rng = self._extract_range(err.get("messages", []))
 
                 lines += [
-                    f"<details>",
+                    "<details>",
                     f"<summary><b>#{i} — {emoji} {cat} · {count} ocurrencias</b></summary>",
                     "",
                     f"- **Rango temporal:** {rng}",
@@ -283,15 +266,15 @@ class MarkdownReporter:
                 lines += ["</details>", ""]
 
             if len(errors) > 30:
-                lines += [f"_... y {len(errors) - 30} grupos de error más (ver HTML para el listado completo)._", ""]
+                lines += [f"_... y {len(errors) - 30} grupos más (ver HTML para el listado completo)._", ""]
 
         # ----- Ruido -----
         if noise:
             lines += [
                 "## 🧹 Ruido filtrado (no son errores reales)",
                 "",
-                f"Se detectaron **{len(noise)}** grupos de líneas que parecen ser HTML de "
-                "páginas de error (Cloudflare, etc.). No se cuentan como errores de la aplicación.",
+                f"Se detectaron **{len(noise)}** grupos con HTML de páginas de error "
+                "(Cloudflare, etc.). No se cuentan como errores de la aplicación.",
                 "",
                 "<details>",
                 "<summary>Ver ejemplos de ruido</summary>",
@@ -309,7 +292,6 @@ class MarkdownReporter:
                 lines.append(f"- {rec}")
             lines.append("")
 
-        # ----- Pie -----
         lines += [
             "---",
             "",
@@ -317,23 +299,106 @@ class MarkdownReporter:
         ]
         return "\n".join(lines)
 
+    def _build_ai_section(self, ai: Dict[str, Any]) -> List[str]:
+        """
+        Genera la sección de IA en Markdown. Soporta dos formatos:
+        - Nuevo (estructurado): resumen_ejecutivo, categorias, acciones_recomendadas...
+        - Antiguo: {status, analysis}
+        """
+        lines: List[str] = ["## 🤖 Análisis con IA", ""]
+
+        # ---- Caso de fallo ----
+        status = ai.get("status", "")
+        if status in ("failed", "error_parsing") or "error" in ai:
+            lines.append(f"⚠️ **Estado:** {status or 'error'}")
+            if ai.get("error"):
+                lines.append(f"- Error: `{ai['error']}`")
+            lines.append("")
+            return lines
+
+        # ---- Formato NUEVO estructurado ----
+        if ai.get("resumen_ejecutivo") or ai.get("categorias"):
+            sev = ai.get("severidad_global", "UNKNOWN")
+            lines += [
+                f"**Severidad global:** {self._severity_emoji(sev)} {sev}",
+                "",
+                "> **Resumen:** " + ai.get("resumen_ejecutivo", "—"),
+                "",
+            ]
+
+            categorias = ai.get("categorias", []) or []
+            if categorias:
+                lines.append("### 🔍 Categorías de problemas")
+                lines.append("")
+                for i, cat in enumerate(categorias, 1):
+                    sev_c = cat.get("severidad", "UNKNOWN")
+                    lines += [
+                        f"#### {i}. {cat.get('nombre', 'Sin nombre')}",
+                        "",
+                        f"- **Severidad:** {self._severity_emoji(sev_c)} {sev_c}",
+                        f"- **Frecuencia:** {cat.get('frecuencia', 'N/A')}",
+                        f"- **Descripción:** {cat.get('descripcion', 'N/A')}",
+                        f"- **Causa probable:** {cat.get('causa_probable', 'N/A')}",
+                    ]
+                    if cat.get("evidencia"):
+                        lines.append(f"- **Evidencia:** `{cat['evidencia']}`")
+                    lines.append("")
+
+            patrones = ai.get("patrones_clave", []) or []
+            if patrones:
+                lines.append("### 🎯 Patrones clave detectados")
+                lines.append("")
+                for p in patrones:
+                    lines.append(f"- `{p}`")
+                lines.append("")
+
+            acciones = ai.get("acciones_recomendadas", []) or []
+            if acciones:
+                lines.append("### ✅ Acciones recomendadas")
+                lines.append("")
+                lines.append("| Prioridad | Acción | Razón |")
+                lines.append("|---|---|---|")
+                for acc in acciones:
+                    prio = acc.get("prioridad", "MEDIA")
+                    emoji = "🔴" if prio == "ALTA" else "🟡" if prio == "MEDIA" else "🟢"
+                    accion = str(acc.get("accion", "N/A")).replace("|", "\\|")
+                    razon = str(acc.get("razon", "N/A")).replace("|", "\\|")
+                    lines.append(f"| {emoji} {prio} | {accion} | {razon} |")
+                lines.append("")
+
+            metricas = ai.get("metricas_sugeridas", []) or []
+            if metricas:
+                lines.append("### 📊 Métricas sugeridas")
+                lines.append("")
+                for m in metricas:
+                    lines.append(f"- {m}")
+                lines.append("")
+
+            return lines
+
+        # ---- Formato ANTIGUO (compatibilidad) ----
+        if ai.get("analysis"):
+            lines += [f"**Estado:** {status or 'success'}", "", str(ai["analysis"]), ""]
+            return lines
+
+        lines += ["⚠️ Análisis IA no disponible. Revisa que Ollama esté corriendo.", ""]
+        return lines
+
     # ------------------------------------------------------------------ #
-    # Generación de HTML (dashboard autocontenido, sin dependencias)
+    # HTML (dashboard autocontenido)
     # ------------------------------------------------------------------ #
     def _build_html(self, data: Dict[str, Any]) -> str:
-        """Construye un dashboard HTML autocontenido (CSS + JS embebidos)."""
         summary = data.get("summary", {})
         errors = data.get("errors", [])
         noise = data.get("noise_errors", [])
         by_category = data.get("by_category", {})
-        ai = data.get("ai_analysis", {})
+        ai = data.get("ai_analysis", {}) or {}
         recommendations = data.get("recommendations", []) or []
 
         total_errors = summary.get("total_errors_real", summary.get("total_errors", 0))
         file_name = html.escape(str(data.get("file", "N/A")))
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # Bloque de tarjetas de métricas
         cards = f"""
         <div class="cards">
           <div class="card"><div class="k">Logs</div><div class="v">{summary.get('total_logs', 0):,}</div></div>
@@ -343,7 +408,6 @@ class MarkdownReporter:
         </div>
         """
 
-        # Barras por categoría (CSS puro, sin librerías)
         max_cat = max(by_category.values()) if by_category else 1
         bars_html = ""
         for cat, count in sorted(by_category.items(), key=lambda x: x[1], reverse=True):
@@ -355,7 +419,6 @@ class MarkdownReporter:
               <div class="bar-count">{count:,}</div>
             </div>"""
 
-        # Listado de errores colapsables
         items_html = ""
         for i, err in enumerate(errors, 1):
             msgs = "".join(
@@ -372,7 +435,6 @@ class MarkdownReporter:
               <div class="msgs">{msgs}</div>
             </details>"""
 
-        # Ruido (solo conteo)
         noise_html = ""
         if noise:
             noise_html = f"""
@@ -380,17 +442,14 @@ class MarkdownReporter:
             <p>{len(noise)} grupos de líneas tipo HTML/Cloudflare. No cuentan como errores de la app.</p>
             """
 
-        # Recomendaciones
         rec_html = ""
         if recommendations:
             rec_html = "<h2>💡 Recomendaciones</h2><ul>" + \
                 "".join(f"<li>{html.escape(str(r))}</li>" for r in recommendations) + "</ul>"
 
-        # IA
-        ai_status = html.escape(str(ai.get("status", "No disponible")))
-        ai_text = html.escape(str(ai.get("analysis", ""))) if ai.get("status") == "success" else ""
+        # --- Sección IA en HTML (estructurada) ---
+        ai_html = self._build_ai_html(ai)
 
-        # Plantilla completa
         return f"""<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -406,6 +465,7 @@ class MarkdownReporter:
          background: var(--bg); color: var(--fg); padding: 32px; }}
   h1 {{ margin: 0 0 4px; }}
   h2 {{ margin-top: 32px; border-bottom: 1px solid #334155; padding-bottom: 6px; }}
+  h3 {{ margin-top: 24px; color: var(--accent); }}
   .meta {{ color: var(--muted); font-size: 14px; margin-bottom: 24px; }}
   .cards {{ display:grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr));
             gap: 16px; margin: 24px 0; }}
@@ -422,15 +482,31 @@ class MarkdownReporter:
   .err-item {{ background: var(--card); border-radius: 8px; margin: 8px 0; padding: 12px 16px; }}
   .err-item summary {{ cursor: pointer; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }}
   .err-item .cat {{ padding: 2px 8px; border-radius: 6px; background:#334155; font-size:12px; }}
-  .err-item .cat.timeout {{ background:#7c2d12; }}
-  .err-item .cat.conexion {{ background:#7c2d12; }}
+  .err-item .cat.timeout, .err-item .cat.conexion {{ background:#7c2d12; }}
   .err-item .cat.http_503, .err-item .cat.http_521 {{ background:#78350f; }}
   .err-item .cat.permisos {{ background:#581c87; }}
+  .err-item .cat.nullpointer {{ background:#7f1d1d; }}
   .err-item .range {{ color: var(--muted); font-size: 12px; margin-left: auto; }}
   pre {{ background:#020617; padding:10px; border-radius:6px; overflow-x:auto;
          font-size: 12px; color:#cbd5e1; }}
   input.search {{ width:100%; padding:10px; border-radius:8px; border:1px solid #334155;
                   background:#020617; color: var(--fg); margin: 16px 0; }}
+  .ai-box {{ background: var(--card); border-left: 4px solid var(--accent);
+             padding: 16px 20px; border-radius: 8px; margin: 12px 0; }}
+  .ai-summary {{ font-size: 16px; font-style: italic; color: #cbd5e1; margin: 8px 0 16px; }}
+  .cat-block {{ background: #0b1220; border-radius: 8px; padding: 14px 16px;
+                margin: 10px 0; border-left: 3px solid var(--accent); }}
+  .cat-block h4 {{ margin: 0 0 8px; color: var(--accent); }}
+  .cat-block p {{ margin: 4px 0; color: #cbd5e1; font-size: 14px; }}
+  .sev {{ padding: 2px 8px; border-radius: 6px; font-size:12px; font-weight:600; }}
+  .sev.CRITICAL {{ background:#7f1d1d; color:#fecaca; }}
+  .sev.HIGH {{ background:#78350f; color:#fed7aa; }}
+  .sev.MEDIUM {{ background:#713f12; color:#fde68a; }}
+  .sev.LOW {{ background:#14532d; color:#bbf7d0; }}
+  .actions-table {{ width:100%; border-collapse: collapse; margin-top: 8px; }}
+  .actions-table th, .actions-table td {{ text-align:left; padding: 8px 10px;
+      border-bottom: 1px solid #334155; font-size: 14px; }}
+  .actions-table th {{ color: var(--muted); font-weight: 500; }}
   footer {{ margin-top: 40px; color: var(--muted); font-size: 12px; text-align:center; }}
 </style>
 </head>
@@ -443,9 +519,7 @@ class MarkdownReporter:
   <h2>🔝 Errores por tipo</h2>
   {bars_html or '<p>Sin errores clasificados.</p>'}
 
-  <h2>🤖 Análisis con IA</h2>
-  <p><b>Estado:</b> {ai_status}</p>
-  <p>{ai_text}</p>
+  {ai_html}
 
   {noise_html}
 
@@ -458,7 +532,6 @@ class MarkdownReporter:
   <footer>Reporte generado automáticamente por el Analizador de Logs con IA</footer>
 
 <script>
-  // Filtro simple: muestra/oculta items según el texto buscado.
   const q = document.getElementById('q');
   q.addEventListener('input', () => {{
     const term = q.value.toLowerCase();
@@ -469,3 +542,76 @@ class MarkdownReporter:
 </script>
 </body>
 </html>"""
+
+    def _build_ai_html(self, ai: Dict[str, Any]) -> str:
+        """Sección de IA en HTML con soporte para formato estructurado y antiguo."""
+        status = ai.get("status", "")
+        if status in ("failed", "error_parsing") or "error" in ai:
+            return (
+                "<h2>🤖 Análisis con IA</h2>"
+                f"<p>⚠️ Estado: <b>{html.escape(str(status or 'error'))}</b></p>"
+                f"<pre>{html.escape(str(ai.get('error', '')))}</pre>"
+            )
+
+        # Formato nuevo estructurado
+        if ai.get("resumen_ejecutivo") or ai.get("categorias"):
+            sev = html.escape(str(ai.get("severidad_global", "UNKNOWN")))
+            out = [
+                "<h2>🤖 Análisis con IA</h2>",
+                '<div class="ai-box">',
+                f'<p><b>Severidad global:</b> <span class="sev {sev}">{sev}</span></p>',
+                f'<p class="ai-summary">{html.escape(str(ai.get("resumen_ejecutivo", "—")))}</p>',
+            ]
+
+            for i, cat in enumerate(ai.get("categorias", []), 1):
+                sev_c = html.escape(str(cat.get("severidad", "UNKNOWN")))
+                out.append('<div class="cat-block">')
+                out.append(f'<h4>{i}. {html.escape(str(cat.get("nombre", "")))} '
+                           f'<span class="sev {sev_c}">{sev_c}</span></h4>')
+                out.append(f'<p><b>Frecuencia:</b> {html.escape(str(cat.get("frecuencia", "N/A")))}</p>')
+                out.append(f'<p><b>Descripción:</b> {html.escape(str(cat.get("descripcion", "N/A")))}</p>')
+                out.append(f'<p><b>Causa probable:</b> {html.escape(str(cat.get("causa_probable", "N/A")))}</p>')
+                if cat.get("evidencia"):
+                    out.append(f'<p><b>Evidencia:</b> <code>{html.escape(str(cat["evidencia"]))}</code></p>')
+                out.append('</div>')
+
+            patrones = ai.get("patrones_clave", []) or []
+            if patrones:
+                out.append("<h3>🎯 Patrones clave</h3><ul>")
+                for p in patrones:
+                    out.append(f"<li><code>{html.escape(str(p))}</code></li>")
+                out.append("</ul>")
+
+            acciones = ai.get("acciones_recomendadas", []) or []
+            if acciones:
+                out.append("<h3>✅ Acciones recomendadas</h3>")
+                out.append('<table class="actions-table">'
+                           '<thead><tr><th>Prioridad</th><th>Acción</th><th>Razón</th></tr></thead><tbody>')
+                for acc in acciones:
+                    prio = html.escape(str(acc.get("prioridad", "MEDIA")))
+                    out.append(
+                        f"<tr><td>{prio}</td>"
+                        f"<td>{html.escape(str(acc.get('accion', '')))}</td>"
+                        f"<td>{html.escape(str(acc.get('razon', '')))}</td></tr>"
+                    )
+                out.append("</tbody></table>")
+
+            metricas = ai.get("metricas_sugeridas", []) or []
+            if metricas:
+                out.append("<h3>📊 Métricas sugeridas</h3><ul>")
+                for m in metricas:
+                    out.append(f"<li>{html.escape(str(m))}</li>")
+                out.append("</ul>")
+
+            out.append("</div>")
+            return "".join(out)
+
+        # Formato antiguo
+        if ai.get("analysis"):
+            return (
+                "<h2>🤖 Análisis con IA</h2>"
+                f"<p><b>Estado:</b> {html.escape(str(status or 'success'))}</p>"
+                f"<div class='ai-box'>{html.escape(str(ai['analysis']))}</div>"
+            )
+
+        return "<h2>🤖 Análisis con IA</h2><p>No disponible.</p>"
