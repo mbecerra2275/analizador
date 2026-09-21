@@ -2,6 +2,7 @@
 Analizador de correlaciones para agrupar logs por correlation ID.
 """
 import re
+import hashlib
 from typing import List, Dict, Any, Optional
 from collections import defaultdict
 from datetime import datetime
@@ -10,13 +11,14 @@ import logging
 logger = logging.getLogger(__name__)
 
 class CorrelationAnalyzer:
-    """Analiza y agrupa logs por correlation ID."""
+    """Analiza y agrupa logs por correlation ID y similitud de errores."""
     
     def __init__(self):
         # Patrón para encontrar correlation IDs
         self.correlation_patterns = [
             re.compile(r'correlation[_-]?id[=:]\s*([a-zA-Z0-9\-_]+)', re.IGNORECASE),
             re.compile(r'\[([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\]'),
+            re.compile(r'\[([a-zA-Z0-9\-_]{3,})\]'),  # IDs simples en corchetes [abc-123]
             re.compile(r'transaction[_-]?id[=:]\s*([a-zA-Z0-9\-_]+)', re.IGNORECASE),
             re.compile(r'request[_-]?id[=:]\s*([a-zA-Z0-9\-_]+)', re.IGNORECASE),
             re.compile(r'trace[_-]?id[=:]\s*([a-zA-Z0-9\-_]+)', re.IGNORECASE),
@@ -27,16 +29,35 @@ class CorrelationAnalyzer:
         self.timestamp_pattern = re.compile(
             r'(\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:,\d{3})?(?:Z|[+-]\d{2}:?\d{2})?)'
         )
+        
+        # Patrones para normalizar mensajes (eliminar partes variables)
+        self.normalization_patterns = [
+            (re.compile(r'\b\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:,\d{3})?(?:Z|[+-]\d{2}:?\d{2})?\b'), '<TIMESTAMP>'),
+            (re.compile(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b'), '<IP>'),
+            (re.compile(r'\b[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\b'), '<UUID>'),
+            (re.compile(r'\[[a-zA-Z0-9\-_]{3,}\]'), '[<ID>]'),  # IDs en corchetes [abc-123]
+            (re.compile(r'\b[a-f0-9]{32,}\b'), '<HASH>'),
+            (re.compile(r'\b\d+\b'), '<NUM>'),
+            (re.compile(r'0x[0-9a-fA-F]+'), '<HEX>'),
+            (re.compile(r'"/[^"]*"'), '<PATH>'),
+            (re.compile(r"'[^']*'"), '<STR>'),
+            (re.compile(r'"[^"]*"'), '<STR>'),
+            (re.compile(r'\b\w+@\w+\.\w+\b'), '<EMAIL>'),
+            (re.compile(r'session[_-]?id[=:]\s*[^\s,]+'), 'session_id=<ID>'),
+            (re.compile(r'user[_-]?id[=:]\s*[^\s,]+'), 'user_id=<ID>'),
+            (re.compile(r'request[_-]?id[=:]\s*[^\s,]+'), 'request_id=<ID>'),
+            (re.compile(r'thread[_-]?id[=:]\s*[^\s,]+'), 'thread_id=<ID>'),
+        ]
     
     def group_by_correlation(self, entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Agrupa entradas de log por correlation ID.
+        Agrupa entradas de log por correlation ID y similitud de errores.
         
         Args:
             entries: Lista de entradas de log parseadas
             
         Returns:
-            Lista de grupos con sus entradas asociadas
+            Lista de grupos con sus entradas asociadas (deduplicados)
         """
         if not entries:
             return []
@@ -75,6 +96,9 @@ class CorrelationAnalyzer:
             }
             result.append(group)
         
+        # DEDUPLICACIÓN: Agrupar grupos con errores similares (mismo patrón normalizado)
+        result = self._deduplicate_groups(result)
+        
         # Ordenar por timestamp - MANEJO DE None
         def get_sort_key(group):
             """Obtiene la clave de ordenación manejando None."""
@@ -85,7 +109,7 @@ class CorrelationAnalyzer:
         
         result.sort(key=get_sort_key)
         
-        logger.info(f"✅ Agrupados {len(entries)} logs en {len(result)} grupos")
+        logger.info(f"✅ Agrupados {len(entries)} logs en {len(result)} grupos (tras deduplicación)")
         return result
     
     def _extract_correlation_id(self, entry: Dict[str, Any]) -> Optional[str]:
@@ -314,3 +338,156 @@ class CorrelationAnalyzer:
             'avg_group_size': round(avg_size, 2),
             'max_group_size': max_size
         }
+    
+    def _normalize_message(self, message: str) -> str:
+        """Normaliza un mensaje eliminando partes variables para detectar duplicados."""
+        if not message:
+            return ''
+        normalized = message
+        for pattern, replacement in self.normalization_patterns:
+            normalized = pattern.sub(replacement, normalized)
+        # También normalizar espacios múltiples
+        normalized = re.sub(r'\s+', ' ', normalized).strip()
+        return normalized
+    
+    def _get_error_signature(self, entries: List[Dict[str, Any]]) -> str:
+        """Genera una firma única para el grupo basada en sus mensajes de error normalizados."""
+        error_messages = self._get_error_messages(entries)
+        if not error_messages:
+            # Usar todos los mensajes si no hay errores explícitos
+            error_messages = [e.get('message', '') for e in entries if e.get('message')]
+        
+        # Normalizar y crear hash
+        normalized_msgs = [self._normalize_message(msg) for msg in error_messages]
+        # Tomar el primer mensaje de error significativo
+        for msg in normalized_msgs:
+            if len(msg) > 10:  # Ignorar mensajes muy cortos
+                return hashlib.md5(msg.encode()).hexdigest()[:12]
+        return hashlib.md5(''.join(normalized_msgs).encode()).hexdigest()[:12]
+    
+    def _deduplicate_groups(self, groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Deduplica grupos que tienen errores con la misma firma normalizada.
+        Fusiona grupos con el mismo patrón de error (incluyendo diferentes correlation IDs).
+        """
+        if not groups:
+            return []
+        
+        # Separar grupos con y sin errores
+        error_groups = [g for g in groups if g.get('has_errors', False)]
+        non_error_groups = [g for g in groups if not g.get('has_errors', False)]
+        
+        # Agrupar grupos de error por firma normalizada
+        signature_to_groups = defaultdict(list)
+        for group in error_groups:
+            sig = self._get_error_signature(group['entries'])
+            signature_to_groups[sig].append(group)
+        
+        # Fusionar grupos con la misma firma
+        deduplicated = []
+        for sig, sig_groups in signature_to_groups.items():
+            if len(sig_groups) == 1:
+                deduplicated.append(sig_groups[0])
+            else:
+                # Fusionar: combinar entradas, sumar contadores, mantener el primero como representante
+                merged_entries = []
+                total_count = 0
+                total_errors = 0
+                first_timestamp = None
+                all_levels = set()
+                all_error_msgs = []
+                correlation_ids = []
+                
+                for g in sig_groups:
+                    merged_entries.extend(g['entries'])
+                    total_count += g['count']
+                    total_errors += g['error_count']
+                    correlation_ids.append(g['correlation_id'])
+                    if g['timestamp'] and (first_timestamp is None or g['timestamp'] < first_timestamp):
+                        first_timestamp = g['timestamp']
+                    all_levels.update(g['levels'])
+                    all_error_msgs.extend(g['error_messages'])
+                
+                merged_group = {
+                    'correlation_id': f"merged_{sig}",
+                    'original_correlation_ids': correlation_ids,
+                    'entries': merged_entries,
+                    'count': total_count,
+                    'has_errors': True,
+                    'error_count': total_errors,
+                    'timestamp': first_timestamp,
+                    'levels': sorted(all_levels),
+                    'error_messages': list(dict.fromkeys(all_error_msgs)),  # Deduplicar mensajes
+                    'merged_count': len(sig_groups)
+                }
+                deduplicated.append(merged_group)
+                logger.info(f"🔄 Fusionados {len(sig_groups)} grupos con misma firma de error: {sig}")
+        
+        # Añadir grupos sin errores (no se deduplican)
+        deduplicated.extend(non_error_groups)
+        
+        return deduplicated
+    
+    def group_by_correlation(self, entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Agrupa entradas de log por correlation ID y similitud de errores.
+        
+        Args:
+            entries: Lista de entradas de log parseadas
+            
+        Returns:
+            Lista de grupos con sus entradas asociadas (deduplicados)
+        """
+        if not entries:
+            return []
+        
+        # Agrupar por correlation ID
+        groups = defaultdict(list)
+        entries_without_correlation = []
+        
+        for entry in entries:
+            # Intentar obtener correlation_id de varias fuentes
+            corr_id = self._extract_correlation_id(entry)
+            
+            if corr_id:
+                groups[corr_id].append(entry)
+            else:
+                entries_without_correlation.append(entry)
+        
+        # Si hay entradas sin correlation ID, agruparlas por timestamp cercano
+        if entries_without_correlation:
+            time_groups = self._group_by_time(entries_without_correlation)
+            for time_id, group_entries in time_groups.items():
+                groups[time_id] = group_entries
+        
+        # Convertir a lista de grupos
+        result = []
+        for corr_id, entries_list in groups.items():
+            group = {
+                'correlation_id': corr_id,
+                'entries': entries_list,
+                'count': len(entries_list),
+                'has_errors': self._has_errors(entries_list),
+                'error_count': self._count_errors(entries_list),
+                'timestamp': self._get_first_timestamp(entries_list),
+                'levels': self._get_levels(entries_list),
+                'error_messages': self._get_error_messages(entries_list)
+            }
+            result.append(group)
+        
+        # DEDUPLICACIÓN: Agrupar grupos con errores similares (mismo patrón normalizado)
+        # Esto fusiona grupos de DIFERENTES correlation IDs que tienen el mismo error
+        result = self._deduplicate_groups(result)
+        
+        # Ordenar por timestamp - MANEJO DE None
+        def get_sort_key(group):
+            """Obtiene la clave de ordenación manejando None."""
+            ts = group.get('timestamp')
+            if ts is None:
+                return ''  # Los None van al final
+            return ts
+        
+        result.sort(key=get_sort_key)
+        
+        logger.info(f"✅ Agrupados {len(entries)} logs en {len(result)} grupos (tras deduplicación)")
+        return result

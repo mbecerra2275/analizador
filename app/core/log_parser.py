@@ -50,6 +50,21 @@ class LogParser:
             'FATAL': 5,
             'CRITICAL': 5
         }
+        
+        # Patrones para detectar inicio de nueva entrada (timestamp)
+        self.timestamp_start_patterns = [
+            re.compile(r'^\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}'),  # 2024-01-15 10:30:45
+            re.compile(r'^\d{2}/\w{3}/\d{4}:\d{2}:\d{2}:\d{2}'),       # 15/Jan/2024:10:30:45
+            re.compile(r'^\[\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}'),  # [2024-01-15 10:30:45
+        ]
+    
+    def _line_starts_with_timestamp(self, line: str) -> bool:
+        """Verifica si una línea empieza con timestamp (nueva entrada de log)."""
+        stripped = line.lstrip()
+        for pattern in self.timestamp_start_patterns:
+            if pattern.match(stripped):
+                return True
+        return False
     
     def parse(self, content: str) -> List[Dict[str, Any]]:
         """
@@ -72,23 +87,75 @@ class LogParser:
         format_detected = self._detect_format(lines[:10])
         logger.info(f"Formato detectado: {format_detected}")
         
+        # Buffer para agrupar líneas multi-line (stack traces, etc.)
+        current_entry = None
+        current_entry_lines = []
+        
         for i, line in enumerate(lines, 1):
             if not line.strip():
+                if current_entry:
+                    current_entry_lines.append(line)
                 continue
+            
+            # Verificar si la línea empieza con timestamp (nueva entrada)
+            is_new_entry = self._line_starts_with_timestamp(line)
+            
+            if is_new_entry and current_entry:
+                # Guardar entrada anterior con sus líneas continuadas
+                current_entry['message'] = '\n'.join(current_entry_lines)
+                current_entry['raw'] = '\n'.join(current_entry_lines)
+                current_entry['multiline'] = len(current_entry_lines) > 1
+                parsed_entries.append(current_entry)
+                current_entry = None
+                current_entry_lines = []
             
             try:
                 entry = self._parse_line(line, format_detected)
                 if entry:
-                    # Agregar número de línea
                     entry['line_number'] = i
-                    parsed_entries.append(entry)
+                    if is_new_entry or current_entry is None:
+                        # Nueva entrada
+                        current_entry = entry
+                        current_entry_lines = [line]
+                    else:
+                        # Línea continuada (stack trace, etc.)
+                        current_entry_lines.append(line)
+                else:
+                    # Si no se puede parsear, tratar como continuación si hay entrada actual
+                    if current_entry:
+                        current_entry_lines.append(line)
+                    else:
+                        # Entrada básica para líneas sueltas
+                        parsed_entries.append({
+                            'timestamp': None,
+                            'level': 'INFO',
+                            'message': line.strip(),
+                            'correlation_id': None,
+                            'raw': line,
+                            'line_number': i,
+                            'multiline': False
+                        })
             except Exception as e:
                 logger.debug(f"Error parseando línea {i}: {str(e)}")
-                # Si falla, intentar con formato simple
-                entry = self._parse_line_simple(line)
-                if entry:
-                    entry['line_number'] = i
-                    parsed_entries.append(entry)
+                if current_entry:
+                    current_entry_lines.append(line)
+                else:
+                    parsed_entries.append({
+                        'timestamp': None,
+                        'level': 'INFO',
+                        'message': line.strip(),
+                        'correlation_id': None,
+                        'raw': line,
+                        'line_number': i,
+                        'multiline': False
+                    })
+        
+        # Guardar última entrada
+        if current_entry:
+            current_entry['message'] = '\n'.join(current_entry_lines)
+            current_entry['raw'] = '\n'.join(current_entry_lines)
+            current_entry['multiline'] = len(current_entry_lines) > 1
+            parsed_entries.append(current_entry)
         
         logger.info(f"✅ Parseados {len(parsed_entries)} logs de {len(lines)} líneas")
         return parsed_entries

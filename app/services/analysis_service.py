@@ -211,6 +211,10 @@ class AnalysisService:
                     'levels': group.get('levels', []),
                     'total_entries': group.get('count', 0)
                 }
+                # Información adicional de grupos fusionados (deduplicados)
+                if group.get('merged_count'):
+                    error_entry['merged_from'] = group.get('merged_count')
+                    error_entry['original_correlation_ids'] = group.get('original_correlation_ids', [])
                 errors.append(error_entry)
         
         # Ordenar errores por cantidad (más errores primero)
@@ -223,7 +227,7 @@ class AnalysisService:
         Ejecuta el análisis con IA.
         
         Args:
-            errors: Lista de errores encontrados
+            errors: Lista de errores encontrados (ya deduplicados)
             groups: Lista de grupos de logs
             
         Returns:
@@ -245,15 +249,23 @@ class AnalysisService:
                     'errors_analyzed': len(errors)
                 }
             
-            # Preparar contexto para la IA
+            # Preparar contexto enriquecido para la IA
+            total_original_errors = sum(e.get('error_count', 0) for e in errors)
+            total_merged = sum(e.get('merged_from', 1) for e in errors)
+            
             context = {
-                'total_errors': len(errors),
+                'total_errors': len(errors),  # Grupos únicos de error (tras deduplicación)
+                'total_original_errors': total_original_errors,  # Total de ocurrencias reales
                 'total_groups': len(groups),
+                'deduplication_ratio': round(total_original_errors / max(len(errors), 1), 1),
                 'error_summary': [{
                     'id': e.get('correlation_id', 'N/A'),
                     'count': e.get('error_count', 0),
-                    'sample': e.get('messages', [''])[0][:100] if e.get('messages') else ''
-                } for e in errors[:5]]
+                    'merged_from': e.get('merged_from', 1),
+                    'original_ids': e.get('original_correlation_ids', []),
+                    'sample': e.get('messages', [''])[0][:200] if e.get('messages') else '',
+                    'levels': e.get('levels', [])
+                } for e in errors[:8]]  # Más errores para mejor contexto
             }
             
             # Ejecutar análisis
@@ -291,25 +303,35 @@ class AnalysisService:
         if not errors:
             return "✅ No se encontraron errores."
         
+        total_occurrences = sum(e.get('error_count', 0) for e in errors)
+        merged_groups = sum(1 for e in errors if e.get('merged_from', 1) > 1)
+        
         analysis = []
-        analysis.append(f"⚠️ Se encontraron {len(errors)} grupos con errores:")
+        analysis.append(f"⚠️ Se encontraron {len(errors)} patrones de error únicos ({total_occurrences} ocurrencias totales)")
+        if merged_groups:
+            analysis.append(f"🔄 {merged_groups} patrones agrupan errores duplicados de múltiples correlation IDs")
         
         for i, error in enumerate(errors[:10], 1):
             corr_id = error.get('correlation_id', 'N/A')
             count = error.get('error_count', 0)
+            merged = error.get('merged_from', 1)
             messages = error.get('messages', [])
             
-            analysis.append(f"\n{i}. Correlation ID: {corr_id}")
-            analysis.append(f"   Errores: {count}")
+            analysis.append(f"\n{i}. {corr_id}")
+            analysis.append(f"   Ocurrencias: {count}" + (f" (agrupados de {merged} correlation IDs)" if merged > 1 else ""))
             
             if messages:
                 first_msg = messages[0]
-                if len(first_msg) > 150:
-                    first_msg = first_msg[:150] + "..."
+                if len(first_msg) > 200:
+                    first_msg = first_msg[:200] + "..."
                 analysis.append(f"   Mensaje: {first_msg}")
+            
+            if error.get('original_correlation_ids'):
+                orig_ids = error['original_correlation_ids'][:5]
+                analysis.append(f"   IDs originales: {', '.join(orig_ids)}" + ("..." if len(error['original_correlation_ids']) > 5 else ""))
         
         if len(errors) > 10:
-            analysis.append(f"\n... y {len(errors) - 10} errores más")
+            analysis.append(f"\n... y {len(errors) - 10} patrones más")
         
         analysis.append("\n💡 Recomendación: Revisar los logs para más detalles")
         
