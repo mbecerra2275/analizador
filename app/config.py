@@ -32,7 +32,7 @@ class Config:
 
     # --- Configuración de modelo - MÁS RÁPIDO ---
     OLLAMA_TEMPERATURE: float = 0.3                     # Creatividad baja
-    OLLAMA_NUM_PREDICT: int = 300                       # Tokens máx (de 500 a 300)
+    OLLAMA_NUM_PREDICT: int = 800                       # Tokens máx (aumentado de 300 para respuestas completas)
     OLLAMA_TOP_P: float = 0.9                           # Muestreo nucleus
 
     # --- Logging ---
