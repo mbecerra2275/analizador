@@ -36,7 +36,21 @@ class LogParser:
                 r'(?P<message>.*)'
             ),
             # Formato JSON: {"timestamp": "...", "level": "...", "message": "..."}
-            'json': re.compile(r'^\{.*\}$')
+            'json': re.compile(r'^\{.*\}$'),
+            # Formato: level: correlation_id timestamp message +duration
+            # Ejemplo: info: 91231791d41e401d832693caba2f603a 2026-09-21T17:21:27.575Z Inicio obtenerDatosMaestros +574ms
+            'colon_corr': re.compile(
+                r'(?P<level>\w+):\s+'
+                r'(?P<correlation_id>[a-f0-9]{32})\s+'
+                r'(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)\s+'
+                r'(?P<message>.+?)\s+\+\d+ms$'
+            ),
+            # Formato: level: timestamp message +duration (sin correlation_id)
+            'colon_simple': re.compile(
+                r'(?P<level>\w+):\s+'
+                r'(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)\s+'
+                r'(?P<message>.+?)\s+\+\d+ms$'
+            ),
         }
         
         # Niveles de log por prioridad
@@ -56,6 +70,8 @@ class LogParser:
             re.compile(r'^\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}'),  # 2024-01-15 10:30:45
             re.compile(r'^\d{2}/\w{3}/\d{4}:\d{2}:\d{2}:\d{2}'),       # 15/Jan/2024:10:30:45
             re.compile(r'^\[\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}'),  # [2024-01-15 10:30:45
+            re.compile(r'^\w+:\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}'),  # info: 2026-09-21T17:21:27.575Z
+            re.compile(r'^\w+:\s+[a-f0-9]{32}\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}'),  # info: 9123... 2026-09-21T17:21:27.575Z
         ]
     
     def _line_starts_with_timestamp(self, line: str) -> bool:
@@ -263,7 +279,8 @@ class LogParser:
         # Diferentes formatos de timestamp
         formats = [
             '%Y-%m-%d %H:%M:%S,%f',
-            '%Y-%m-%dT%H:%M:%S.%f',
+            '%Y-%m-%dT%H:%M:%S.%fZ',  # ISO con Z y milisegundos: 2026-09-21T17:21:27.575Z
+            '%Y-%m-%dT%H:%M:%S.%f',   # ISO con milisegundos
             '%Y-%m-%d %H:%M:%S',
             '%Y-%m-%dT%H:%M:%SZ',
             '%d/%b/%Y:%H:%M:%S %z',
