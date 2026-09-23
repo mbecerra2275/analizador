@@ -2,9 +2,27 @@
 Configuración centralizada de la aplicación.
 """
 import os                 # Leer variables de entorno
+import sys                # Detectar ejecutable PyInstaller (frozen)
 from pathlib import Path  # Manejo portable de rutas
 from typing import Dict, Any, Optional  # Tipado de retornos
 from dataclasses import dataclass, field  # Clase de datos y campos con default
+
+
+def _get_data_dir() -> Path:
+    """
+    Directorio escribible para datos de usuario (reportes, logs, reglas).
+
+    La versión instalada vive en "C:\\Program Files\\...", que es de solo
+    lectura para usuarios estándar. Por eso, cuando la app corre como
+    ejecutable PyInstaller (sys.frozen), los datos van a %LOCALAPPDATA%.
+    En modo desarrollo se usa la raíz del proyecto.
+    """
+    if getattr(sys, 'frozen', False):
+        base = os.getenv('LOCALAPPDATA')
+        if base:
+            return Path(base) / "Log Analyzer IA"
+        return Path.home() / "Log Analyzer IA"
+    return Path(__file__).parent.parent
 
 
 @dataclass
@@ -13,10 +31,11 @@ class Config:
 
     # --- Rutas base del proyecto ---
     BASE_DIR: Path = field(default_factory=lambda: Path(__file__).parent.parent)
-    LOGS_DIR: Path = field(default_factory=lambda: Path(__file__).parent.parent / "logs")
-    OUTPUT_DIR: Path = field(default_factory=lambda: Path(__file__).parent.parent / "output")
-    REPORTS_DIR: Path = field(default_factory=lambda: Path(__file__).parent.parent / "output" / "reports")
-    RULES_DIR: Path = field(default_factory=lambda: Path(__file__).parent.parent / "config" / "rules")
+    DATA_DIR: Path = field(default_factory=_get_data_dir)
+    LOGS_DIR: Path = field(default_factory=lambda: _get_data_dir() / "logs")
+    OUTPUT_DIR: Path = field(default_factory=lambda: _get_data_dir() / "output")
+    REPORTS_DIR: Path = field(default_factory=lambda: _get_data_dir() / "output" / "reports")
+    RULES_DIR: Path = field(default_factory=lambda: _get_data_dir() / "rules")
 
     # --- Configuración de Ollama - TIME OUTS MÁS LARGOS ---
     OLLAMA_URL: str = "http://127.0.0.1:11434"          # Endpoint local de Ollama
@@ -37,13 +56,22 @@ class Config:
 
     # --- Logging ---
     LOG_LEVEL: str = "INFO"                             # Nivel de log por defecto
-    LOG_FILE: Path = field(default_factory=lambda: Path(__file__).parent.parent / "logs" / "analyzer.log")
+    LOG_FILE: Path = field(default_factory=lambda: _get_data_dir() / "logs" / "analyzer.log")
 
     def __post_init__(self):
         """Crea los directorios necesarios y carga variables de entorno."""
         # Crea cada directorio si no existe (idempotente)
         for dir_path in [self.LOGS_DIR, self.OUTPUT_DIR, self.REPORTS_DIR, self.RULES_DIR]:
-            dir_path.mkdir(parents=True, exist_ok=True)
+            try:
+                dir_path.mkdir(parents=True, exist_ok=True)
+            except PermissionError as e:
+                # Error claro en vez de fallo silencioso: el reporte nunca aparecería
+                import logging
+                logging.getLogger(__name__).error(
+                    f"❌ Sin permiso de escritura en {dir_path}. "
+                    f"Ejecuta como administrador o revisa los permisos. Detalle: {e}"
+                )
+                raise
 
         # Sobrescribe valores con variables de entorno si existen
         self._load_from_env()

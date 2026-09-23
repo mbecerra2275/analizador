@@ -29,7 +29,9 @@ class AnalysisService:
         self.parser = LogParser()
         self.correlator = CorrelationAnalyzer()
         self.filter = SmartFilter()
-        self.reporter = MarkdownReporter()
+        # Usar la ruta de reportes de la configuración (en la versión instalada
+        # apunta a %LOCALAPPDATA%, escribible sin permisos de administrador)
+        self.reporter = MarkdownReporter(output_dir=str(self.config.REPORTS_DIR))
         self.file_utils = FileUtils()
         
         # Inicializar AI Analyzer con la configuración

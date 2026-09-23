@@ -683,8 +683,12 @@ class MainWindow:
                 messagebox.showerror("Error", f"No se pudo guardar: {e}")
 
     def _open_report(self):
-        # Intentar encontrar el último reporte
-        reports_dir = Path(__file__).parent.parent.parent / "output" / "reports"
+        # Intentar encontrar el último reporte.
+        # Se usa Config().REPORTS_DIR porque en la versión instalada (.exe)
+        # __file__ apunta al temporal de PyInstaller y "output/reports"
+        # relativo caería en Program Files (solo lectura).
+        from ..config import Config
+        reports_dir = Config().REPORTS_DIR
         if reports_dir.exists():
             reports = list(reports_dir.glob("*.md"))
             if reports:
