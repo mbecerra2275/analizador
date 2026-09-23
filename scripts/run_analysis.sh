@@ -13,7 +13,6 @@ echo "================================================"
 # Configuración
 LOG_FILE=${1:-"logs/sample.log"}
 OUTPUT_DIR=${2:-"output/reports"}
-CONFIG_FILE=${3:-"config/default.yaml"}
 
 # Verificar que existe el archivo de log
 if [ ! -f "$LOG_FILE" ]; then
@@ -24,11 +23,9 @@ fi
 
 # Crear directorios necesarios
 mkdir -p "$OUTPUT_DIR"
-mkdir -p output/temp
 
 echo -e "${YELLOW}📂 Archivo:${NC} $LOG_FILE"
 echo -e "${YELLOW}📄 Salida:${NC} $OUTPUT_DIR"
-echo -e "${YELLOW}⚙️  Configuración:${NC} $CONFIG_FILE"
 echo ""
 
 # Ejecutar el análisis
@@ -36,7 +33,6 @@ echo -e "${GREEN}▶️  Ejecutando análisis...${NC}"
 python -m app.cli \
     --file "$LOG_FILE" \
     --output "$OUTPUT_DIR" \
-    --config "$CONFIG_FILE" \
     --verbose
 
 # Verificar resultado

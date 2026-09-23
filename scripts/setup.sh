@@ -16,6 +16,19 @@ if ! command -v ollama &> /dev/null; then
     echo "   Visita https://ollama.ai para instalarlo"
 fi
 
+# Verificar Graphviz (para diagramas PNG)
+if ! command -v dot &> /dev/null; then
+    echo "⚠️  Graphviz no está instalado (necesario para diagramas PNG)"
+    if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OSTYPE" == "win32" ]]; then
+        echo "   Instalando con winget..."
+        winget install --id=Graphviz.Graphviz --silent --accept-source-agreements --accept-package-agreements 2>/dev/null || echo "   Ejecuta manualmente: winget install Graphviz.Graphviz"
+    elif [[ "$OSTYPE" == "darwin"* ]]; then
+        echo "   Instala con: brew install graphviz"
+    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        echo "   Instala con: sudo apt-get install graphviz"
+    fi
+fi
+
 # Instalar dependencias
 echo "📦 Instalando dependencias..."
 pip install -r requirements.txt
@@ -30,8 +43,6 @@ fi
 echo "📁 Creando directorios necesarios..."
 mkdir -p logs
 mkdir -p output/reports
-mkdir -p output/analysis
-mkdir -p output/temp
 
 # Hacer ejecutables los scripts
 chmod +x scripts/*.sh
