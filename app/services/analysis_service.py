@@ -10,7 +10,6 @@ from ..core.correlation_analyzer import CorrelationAnalyzer
 from ..core.smart_filter import SmartFilter
 from ..services.ai_analyzer import AIAnalyzer
 from ..reporters.markdown_reporter import MarkdownReporter
-from ..reporters.traceability_diagram import generate_traceability_diagram
 from ..utils.file_utils import FileUtils
 from ..config import Config
 
@@ -169,19 +168,6 @@ class AnalysisService:
                 logger.error(f"❌ Error generando reporte: {str(e)}")
                 report['report_path'] = None
                 report['report_error'] = str(e)
-            
-            # 10. Generar diagrama de trazabilidad
-            logger.info("📊 Generando diagrama de trazabilidad...")
-            try:
-                base_filename = Path(file_path).stem
-                output_dir = str(self.config.REPORTS_DIR)
-                traceability_files = generate_traceability_diagram(report, output_dir, base_filename)
-                report['traceability_diagrams'] = traceability_files
-                logger.info(f"✅ Diagramas generados: {list(traceability_files.keys())}")
-            except Exception as e:
-                logger.warning(f"⚠️ Error generando diagramas de trazabilidad: {str(e)}")
-                report['traceability_diagrams'] = {}
-                report['traceability_error'] = str(e)
             
             logger.info("✅ Análisis completado exitosamente")
             return report

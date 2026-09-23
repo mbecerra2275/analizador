@@ -444,7 +444,6 @@ class MainWindow:
         ttk.Button(toolbar, text="📋 Copiar", command=self._copy_results, style='Ghost.TButton').pack(side=tk.RIGHT, padx=4)
         ttk.Button(toolbar, text="💾 Guardar", command=self._save_results, style='Ghost.TButton').pack(side=tk.RIGHT, padx=4)
         ttk.Button(toolbar, text="📄 Abrir Reporte", command=self._open_report, style='Ghost.TButton').pack(side=tk.RIGHT, padx=4)
-        ttk.Button(toolbar, text="🔗 Trazabilidad", command=self._open_traceability, style='Ghost.TButton').pack(side=tk.RIGHT, padx=4)
 
         # Área de texto con mejor estilo
         self.result_text = scrolledtext.ScrolledText(
@@ -705,38 +704,6 @@ class MainWindow:
                 self._show_toast("No hay reportes generados")
         else:
             self._show_toast("Directorio de reportes no encontrado")
-
-    def _open_traceability(self):
-        """Abre el diagrama de trazabilidad más reciente."""
-        reports_dir = Path(__file__).parent.parent.parent / "output" / "reports"
-        if not reports_dir.exists():
-            self._show_toast("Directorio de reportes no encontrado")
-            return
-
-        # Buscar archivos de diagrama (mermaid, dot, png, svg)
-        diagram_extensions = ['*.mmd', '*.dot', '*.png', '*.svg']
-        diagrams = []
-        for ext in diagram_extensions:
-            diagrams.extend(list(reports_dir.glob(ext)))
-
-        if not diagrams:
-            self._show_toast("No hay diagramas de trazabilidad generados")
-            return
-
-        # Obtener el más reciente
-        latest = max(diagrams, key=lambda f: f.stat().st_mtime)
-
-        import subprocess, sys
-        try:
-            if sys.platform == 'win32':
-                os.startfile(latest)
-            elif sys.platform == 'darwin':
-                subprocess.run(['open', latest])
-            else:
-                subprocess.run(['xdg-open', latest])
-            self._show_toast(f"Diagrama abierto: {latest.name}")
-        except Exception as e:
-            messagebox.showerror("Error", f"No se pudo abrir diagrama: {e}")
 
     def _show_toast(self, message):
         """Muestra un mensaje toast temporal."""
