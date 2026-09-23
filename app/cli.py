@@ -76,9 +76,28 @@ def main():
     # Modo: CLI
     file_path = args.file
 
-    # Si no se pasó --file, pedirlo por consola
+# Si no se pasó --file, pedirlo por consola
     if not file_path:
-        file_path = input("📁 Ruta del archivo de logs: ").strip()
+        # Verificar si stdin está disponible y es interactivo
+        # En modo --windowed (GUI) no hay stdin disponible
+        has_stdin = False
+        try:
+            has_stdin = sys.stdin is not None and sys.stdin.isatty()
+        except (AttributeError, OSError):
+            has_stdin = False
+        
+        if has_stdin:
+            try:
+                file_path = input("📁 Ruta del archivo de logs: ").strip()
+            except (EOFError, KeyboardInterrupt, RuntimeError):
+                print("\n❌ Entrada cancelada o no disponible")
+                sys.exit(1)
+        else:
+            print("❌ Error: No se especificó archivo (--file) y no hay terminal interactiva disponible")
+            print("   Uso: LogAnalyzer.exe --file <archivo.log>")
+            print("   O usa la interfaz gráfica: LogAnalyzer.exe --gui")
+            sys.exit(1)
+        
         if not file_path:
             print("❌ No se especificó archivo")
             sys.exit(1)

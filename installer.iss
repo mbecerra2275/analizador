@@ -21,7 +21,7 @@ DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=dist_installer
 OutputBaseFilename=LogAnalyzer_Setup_v{#MyAppVersion}
-SetupIconFile=assets\icon.ico
+; SetupIconFile=assets\icon.ico
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
@@ -33,8 +33,8 @@ Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
-Name: "installollama"; Description: "Instalar Ollama (IA local)"; GroupDescription: "Dependencias:"; Flags: checked
-Name: "installgraphviz"; Description: "Instalar Graphviz (diagramas PNG)"; GroupDescription: "Dependencias:"; Flags: checked
+Name: "installollama"; Description: "Instalar Ollama (IA local)"; GroupDescription: "Dependencias:"; Flags: unchecked
+Name: "installgraphviz"; Description: "Instalar Graphviz (diagramas PNG)"; GroupDescription: "Dependencias:"; Flags: unchecked
 
 [Files]
 Source: "dist\LogAnalyzer.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -64,12 +64,7 @@ Type: filesandordirs; Name: "{app}"
 [Code]
 function InitializeSetup(): Boolean;
 begin
-  // Verificar Windows 10+
-  if not CheckWin32Version(10, 0) then begin
-    MsgBox('Se requiere Windows 10 o superior.', mbError, MB_OK);
-    Result := False;
-  end else
-    Result := True;
+  Result := True;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
