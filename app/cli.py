@@ -78,26 +78,40 @@ def main():
 
 # Si no se pasó --file, pedirlo por consola
     if not file_path:
-        # Verificar si stdin está disponible y es interactivo
-        # En modo --windowed (GUI) no hay stdin disponible
-        has_stdin = False
+        # Detectar si hay consola interactiva disponible.
+        # En ejecutables --windowed (doble clic) no hay stdin/consola.
+        has_console = False
         try:
-            has_stdin = sys.stdin is not None and sys.stdin.isatty()
-        except (AttributeError, OSError):
-            has_stdin = False
-        
-        if has_stdin:
+            if getattr(sys, 'frozen', False):
+                # Entorno PyInstaller: sys.stdin puede ser None o un NullWriter.
+                # os.isatty(0) es más fiable que sys.stdin.isatty() aquí.
+                import os
+                has_console = sys.stdin is not None and os.isatty(0)
+            else:
+                has_console = sys.stdin is not None and sys.stdin.isatty()
+        except (AttributeError, OSError, ValueError):
+            has_console = False
+
+        if has_console:
             try:
                 file_path = input("📁 Ruta del archivo de logs: ").strip()
-            except (EOFError, KeyboardInterrupt, RuntimeError):
+            except (EOFError, KeyboardInterrupt, RuntimeError, OSError):
                 print("\n❌ Entrada cancelada o no disponible")
                 sys.exit(1)
         else:
-            print("❌ Error: No se especificó archivo (--file) y no hay terminal interactiva disponible")
-            print("   Uso: LogAnalyzer.exe --file <archivo.log>")
-            print("   O usa la interfaz gráfica: LogAnalyzer.exe --gui")
-            sys.exit(1)
-        
+            # Sin consola (doble clic en .exe): lanzar la GUI automáticamente
+            # en lugar de fallar con "RuntimeError: lost sys.stdin".
+            try:
+                from .gui.main_window import MainWindow
+                app = MainWindow()
+                app.run()
+                return
+            except ImportError as e:
+                print("❌ Error: No se especificó archivo (--file) y no hay terminal interactiva disponible")
+                print("   Uso: LogAnalyzer.exe --file <archivo.log>")
+                print("   O usa la interfaz gráfica: LogAnalyzer.exe --gui")
+                sys.exit(1)
+
         if not file_path:
             print("❌ No se especificó archivo")
             sys.exit(1)
