@@ -1,0 +1,35 @@
+# CI: ejecuta la suite de tests en cada push/PR a main.
+#
+# Filosofía: rápido y hermético. Los tests no tocan la red (Ollama va
+# mockeado en tests/conftest.py) ni necesitan GUI, así que basta con
+# instalar dependencias y correr pytest. Si esto falla, no se compila
+# ni se distribuye nada.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    # ubuntu es más rápido que windows y suficiente: ningún test
+    # requiere Windows, Tkinter ni Ollama real.
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+
+      - name: Instalar Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependencias (incluye pytest)
+        run: pip install -r requirements-dev.txt
+
+      - name: Ejecutar suite de tests
+        run: python -m pytest tests/ -v

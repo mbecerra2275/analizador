@@ -1,0 +1,3 @@
+# Dependencias solo para desarrollo y testing (no van al .exe)
+-r requirements.txt
+pytest==9.1.1

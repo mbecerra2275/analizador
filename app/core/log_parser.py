@@ -30,9 +30,10 @@ class LogParser:
                 r'(?P<message>.*)'
             ),
             # Formato simple: 2024-01-15 10:30:45 ERROR Mensaje
+            # El ':' tras el nivel es opcional (estilo Syslog: "ERROR: ...").
             'simple': re.compile(
                 r'(?P<timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:,\d{3})?)\s+'
-                r'(?P<level>[A-Z]+)\s+'
+                r'(?P<level>[A-Z]+):?\s+'
                 r'(?P<message>.*)'
             ),
             # Formato JSON: {"timestamp": "...", "level": "...", "message": "..."}
@@ -201,33 +202,52 @@ class LogParser:
         return 'simple'
     
     def _parse_line(self, line: str, format_type: str) -> Optional[Dict[str, Any]]:
-        """Parsea una línea individual según el formato detectado."""
+        """
+        Parsea una línea individual probando los patrones conocidos en orden.
+
+        Primero se intenta el formato mayoritario detectado (caso común y
+        rápido); si no coincide, se prueban el resto de patrones antes de
+        rendirse al fallback genérico. Esto cubre archivos mezclados donde
+        unas líneas usan un formato y otras otro (ej: con y sin
+        correlation-id): antes, las minoritarias perdían timestamp, nivel
+        y correlation-id al caer al fallback.
+        """
         if format_type == 'json':
             return self._parse_json_line(line)
-        
-        pattern = self.patterns.get(format_type)
-        if not pattern:
-            return self._parse_line_simple(line)
-        
-        match = pattern.match(line)
-        if not match:
-            return self._parse_line_simple(line)
-        
-        data = match.groupdict()
-        
-        # Normalizar datos
-        entry = {
-            'timestamp': self._parse_timestamp(data.get('timestamp', '')),
-            'level': data.get('level', 'INFO').upper(),
-            'message': data.get('message', line).strip(),
-            'correlation_id': data.get('correlation_id'),
-            'raw': line
-        }
-        
-        # Extraer información adicional
-        entry.update(self._extract_metadata(entry['message']))
-        
-        return entry
+
+        # Detectado primero, resto después (se excluye 'json': no tiene
+        # grupos nombrados y se parsea con json.loads, no con regex).
+        ordered = [format_type] + [f for f in self.patterns if f not in (format_type, 'json')]
+        for fmt in ordered:
+            pattern = self.patterns.get(fmt)
+            if not pattern:
+                continue
+            match = pattern.match(line)
+            if not match:
+                continue
+            data = match.groupdict()
+
+            # Normalizar datos
+            entry = {
+                'timestamp': self._parse_timestamp(data.get('timestamp', '')),
+                'level': data.get('level', 'INFO').upper(),
+                'message': data.get('message', line).strip(),
+                'correlation_id': data.get('correlation_id'),
+                'raw': line
+            }
+
+            # Extraer información adicional
+            entry.update(self._extract_metadata(entry['message']))
+
+            return entry
+
+        # Ningún patrón conocido coincidió: probar JSON suelto y, si tampoco,
+        # devolver entrada básica sin perder la línea original.
+        if line.strip().startswith('{'):
+            parsed = self._parse_json_line(line)
+            if parsed:
+                return parsed
+        return self._parse_line_simple(line)
     
     def _parse_line_simple(self, line: str) -> Optional[Dict[str, Any]]:
         """Parsea una línea con formato simple."""

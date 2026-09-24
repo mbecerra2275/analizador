@@ -185,10 +185,40 @@ app/
 
 ---
 
+## 🧪 Suite de Tests (Septiembre 2026)
+
+**Archivos:** `tests/` (24 tests, `pytest==9.1.1` en `requirements-dev.txt`)
+
+| Archivo | Tests | Qué cubre |
+|---|---|---|
+| `test_pipeline.py` | 5 | Test dorado end-to-end con log real (valores congelados), rama offline sin IA, generación MD+HTML, archivo inexistente |
+| `test_correlation.py` | 5 | Deduplicación abc-123/def-456, normalización de variables, grupos sin error intactos |
+| `test_log_parser.py` | 8 | Formatos colon_corr/colon_simple/standard, ISO con ms, multilínea, regresión de timestamp minoritario |
+| `test_smart_filter.py` | 6 | Ruido K8s filtrado, errores siempre pasan, regla de volumen >10 |
+| `conftest.py` | — | `offline_ollama` (autouse, sin red), `tmp_config` (reportes a temporal), `FIXTURES_DIR` |
+
+**Bugs reales hallados por los tests y corregidos:**
+1. Líneas de formato minoritario perdían timestamp/nivel → `_parse_line` ahora prueba todos los patrones (antes solo el detectado).
+2. `LEVEL:` estilo Syslog no matcheaba → patrón `simple` acepta `:` opcional.
+3. Efecto colateral verificado como correcto: `total_groups` 3→2 (las 3 líneas sueltas forman 1 grupo temporal).
+
+```bash
+python -m pytest tests/ -v   # 24 passed in 0.35s
+```
+
+---
+
+## ⚙️ CI + Limpieza de Git (Septiembre 2026)
+
+- **`.github/workflows/ci.yml`**: en cada push/PR a `main` corre `pytest tests/ -v` en ubuntu + Python 3.12. Sin red ni GUI (Ollama va mockeado), ~1 min por run.
+- **Limpieza del repo**: se dejaron de trackear `build/`, `LogAnalyzer.spec` y todos los `__pycache__/*.pyc` (commiteados por accidente antes del `.gitignore`).
+- **`.gitignore` blindado**: `build/`, `dist/`, `dist_installer/`, `*.spec`, `.pytest_cache/`, `*.egg-info/`.
+
+---
+
 ## 🚀 Próximos Pasos Sugeridos
 
-1. **Tests unitarios**: Añadir pytest para `LogParser`, `CorrelationAnalyzer`, `SmartFilter`, `TraceabilityDiagramGenerator`
-2. **CI/CD**: GitHub Actions para lint + tests
+1. **Logging a archivo**: `RotatingFileHandler` a `%LOCALAPPDATA%` (LOG_FILE existe pero nada lo usa)
 3. **LogSplitter integration**: Usar en `AnalysisService` para archivos >100MB
 4. **Documentación**: README.md con instalación, uso CLI/GUI, configuración Ollama
 5. **Más formatos**: Syslog, journald, JSON estructurado con campos anidados
